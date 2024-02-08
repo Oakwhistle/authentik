@@ -1,0 +1,150 @@
+---
+version: '3.4'
+services:
+  postgresql:
+    image: postgres:12-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    volumes:
+      - database:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=${PG_PASS}
+      - POSTGRES_USER=${PG_USER:-authentik}
+      - POSTGRES_DB=${PG_DB:-authentik}
+    env_file:
+      - .env
+    networks:
+      - authentik-net
+  redis:
+    image: redis:alpine
+    command: --save 60 1 --loglevel warning
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 3s
+    volumes:
+      - authentik-redis-data:/data
+    networks:
+      - authentik-net
+
+  server:
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2023.8.3}
+    container_name: authentik
+    restart: unless-stopped
+    command: server
+    environment:
+      AUTHENTIK_REDIS__HOST: ${AUTHENTIK_REDIS__HOST}
+      AUTHENTIK_POSTGRESQL__HOST: ${AUTHENTIK_POSTGRESQL__HOST}
+      AUTHENTIK_POSTGRESQL__USER: ${PG_USER:-authentik}
+      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB:-authentik}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}
+      # AUTHENTIK_ERROR_REPORTING__ENABLED: "true"
+      # WORKERS: 2
+    volumes:
+      - authentik-data-media:/media
+      - authentik-data-templates:/templates
+      # - ./custom/custom.css:/web/dist/custom.css
+      # - ./custom/assets:/web/dist/assets
+#      - geoip:/geoip
+    env_file:
+      - .env
+    ports:
+#      - "0.0.0.0:${AUTHENTIK_PORT_HTTP:-9000}:9000"
+#      - "0.0.0.0:${AUTHENTIK_PORT_HTTPS:-9443}:9443"
+      - 9000
+      - 9443
+    networks:
+      - authentik-net
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik
+      - traefik.http.routers.authentik.rule=Host(`${AUTHENTIK_URL}`) || HostRegexp(`{subdomain:[a-z8-9]+}.${DOMAIN}`) && PathPrefix(`/outpost.goauthentik.io/`)
+      - traefik.http.routers.authentik.entryPoints=websecure
+      - traefik.http.routers.authentik.tls.certresolver=le
+      #- traefik.http.routers.authentik.service=authentik
+      #- traefik.http.services.authentik.loadbalancer.server.port=9000
+      #- traefik.http.routers.authentik.service=ak-outpost-authentik-service
+      #- traefik.http.services.ak-outpost-authentik-service.loadbalancer.healthcheck.port=9300
+      #- traefik.http.services.ak-outpost-authentik-service.loadbalancer.server.port=9000
+      #- traefik.http.services.ak-outpost-authentik-service.loadbalancer.healthcheck.path=/ping
+
+  worker:
+    image: ${AUTHENTIK_IMAGE:-ghcr.io/goauthentik/server}:${AUTHENTIK_TAG:-2023.8.3}
+    restart: unless-stopped
+    command: worker
+    environment:
+      AUTHENTIK_REDIS__HOST: ${AUTHENTIK_REDIS__HOST}
+      AUTHENTIK_POSTGRESQL__HOST: ${AUTHENTIK_POSTGRESQL__HOST}
+      AUTHENTIK_POSTGRESQL__USER: ${PG_USER:-authentik}
+      AUTHENTIK_POSTGRESQL__NAME: ${PG_DB:-authentik}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${PG_PASS}
+      # AUTHENTIK_ERROR_REPORTING__ENABLED: "true"
+    # This is optional, and can be removed. If you remove this, the following will happen
+    # - The permissions for the /media folders aren't fixed, so make sure they are 1000:1000
+    # - The docker socket can't be accessed anymore
+    user: root
+    volumes:
+      - authentik-data-media:/media
+      - authentik-data-certs:/certs
+      - /var/run/docker.sock:/var/run/docker.sock
+      - authentik-data-templates:/templates
+ #     - geoip:/geoip
+    env_file:
+      - .env
+    networks:
+      - authentik-net
+
+#  geoipupdate:
+#    image: "maxmindinc/geoipupdate:latest"
+#    volumes:
+#      - "geoip:/usr/share/GeoIP"
+#    environment:
+#      GEOIPUPDATE_EDITION_IDS: "GeoLite2-City"
+#      GEOIPUPDATE_FREQUENCY: "8"
+#    env_file:
+#      - .env
+#    networks:
+#      - authentik-net
+
+
+volumes:
+  database:
+    driver: local-persist
+    driver_opts:
+      mountpoint: /data/dbs/postgres/authentik
+#  geoip:
+#    driver: local-persist
+#    driver_opts:
+#      mountpoint: /data/authentik/geoip
+  authentik-data-media:
+    driver: local-persist
+    driver_opts:
+      mountpoint: ${DATA_MEDIA}
+  authentik-data-certs:
+    driver: local-persist
+    driver_opts:
+      mountpoint: ${DATA_CERTS}
+  authentik-data-templates:
+    driver: local-persist
+    driver_opts:
+      mountpoint: ${DATA_TEMPLATES}
+  authentik-redis-data:
+    driver: local-persist
+    driver_opts:
+      mountpoint: ${REDIS_DATA}
+
+networks:
+  traefik:
+    external: true
+    name: traefik
+  authentik-net:
+    name: authentik-net
