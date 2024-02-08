@@ -120,7 +120,7 @@ volumes:
   database:
     driver: local-persist
     driver_opts:
-      mountpoint: /data/dbs/postgres/authentik
+      mountpoint: ${DATABASE_VOLUME}
 #  geoip:
 #    driver: local-persist
 #    driver_opts:
